@@ -148,24 +148,66 @@ class MiddlewareConnector extends Connector
         PostWebhookSingleRequest::class,
     ];
 
-    private MiddlewareKeyChain $middlewareKeyChain;
+    private string $wmsCode;
+    private string $customerCode;
+    private string $baseUrl = self::BASE_URL_EU_DEV;
+    private ?string $username;
+    private ?string $password;
+    private ?string $refreshToken;
+    private ?DateTime $tokenExpiresAt = null;
+    private ?string $token;
 
+    /**
+     * @throws AuthenticationException
+     * @throws \JsonException
+     */
     public function __construct(
-        private string $wmsCode,
-        private string $customerCode,
-        private string $baseUrl = self::BASE_URL_EU_DEV,
-        private ?string $username = null,
-        private ?string $password = null,
-        private ?string $refreshToken = null,
+        string $wmsCode,
+        string $customerCode,
+        string $baseUrl = self::BASE_URL_EU_DEV,
+        ?string $username = null,
+        ?string $password = null,
+        ?string $refreshToken = null,
+        ?string $token = null,
+        ?DateTime $tokenExpiresAt = null,
     ) {
-        $this->middlewareKeyChain = new MiddlewareKeyChain(
-            $this->username,
-            $this->password,
-            $this->refreshToken,
-            $this->customerCode,
-            $this->wmsCode
-        );
+        $this->wmsCode = $wmsCode;
+        $this->customerCode = $customerCode;
+        $this->baseUrl = $baseUrl;
+        $this->username = $username;
+        $this->password = $password;
+        $this->refreshToken = $refreshToken;
+        $this->token = $token;
+        $this->tokenExpiresAt = $tokenExpiresAt;
     }
+
+    /**
+     * @throws AuthenticationException
+     * @throws \Throwable
+     * @throws \ReflectionException
+     * @throws \JsonException
+     */
+    private function authenticateClient()
+    {
+        if ($this->refreshToken === null) {
+            $auth = $this->send(new postAuthTokenRequest($this->username, $this->password));
+        } else {
+            if ($this->tokenExpiresAt < new DateTime()) {
+                $auth = $this->send(new postRefreshTokenRequest($this->refreshToken));
+            }
+        }
+
+        if ($auth->status() !== 200) {
+            throw new AuthenticationException('Authentication failed');
+        }
+
+        $dateTime = new DateTime();
+        $dateTime->modify('+45 minutes');
+        $this->tokenExpiresAt = $dateTime;
+        $this->token = $auth->json()['token'] ?? null;
+        $this->refreshToken = $auth->json()['refresh_token'] ?? null;
+    }
+
 
     public static function create(
         string $username,
@@ -217,13 +259,19 @@ class MiddlewareConnector extends Connector
     {
         return [
             'timeout' => 30,
-        //            'debug' => true,
+            //            'debug' => true,
         ];
     }
 
+    /**
+     * @throws AuthenticationException
+     * @throws \Throwable
+     * @throws \ReflectionException
+     * @throws \JsonException
+     */
     public function boot(PendingRequest $pendingRequest): void
     {
-        $this->authenticate($this->middlewareKeyChain);
+        $this->authenticateClient();
     }
 
     public function resolveBaseUrl(): string
